@@ -43,15 +43,14 @@ TOOLS_PROMPT = """
 
 class DevLogAgent:
     def __init__(self):
-        preferred = GEMINI_MODEL if GEMINI_MODEL.startswith("models/") else f"models/{GEMINI_MODEL}"
-        candidate_list = [
-            preferred,
-            "models/gemini-2.5-flash",
-            "models/gemini-2.0-flash",
-            "models/gemini-3-flash-preview",
-            "models/gemini-3.7-flash"
+        # 검증된 안정 모델 목록 (기본 Flash 및 Lite 페일오버 풀)
+        self.models = [
+            "gemini-flash-latest",
+            "gemini-flash-lite-latest",
+            "gemini-3.1-flash-lite",
+            "gemini-3-flash-preview",
+            "gemini-3.7-flash"
         ]
-        self.models = list(dict.fromkeys(candidate_list))
         self.session_usage = {
             "prompt_tokens": 0,
             "output_tokens": 0,
@@ -59,7 +58,7 @@ class DevLogAgent:
         }
 
     def call_gemini_api(self, contents: list, system_text: str = "") -> tuple:
-        """Gemini REST API를 직접 호출하고 텍스트 및 사용 토큰 메타데이터를 반환합니다."""
+        """Gemini REST API를 호출하며 429 발생 시 즉시 가용 모델로 자동 페일오버합니다."""
         if not GEMINI_API_KEY:
             raise ValueError("GEMINI_API_KEY가 설정되지 않았습니다.")
             
@@ -79,39 +78,39 @@ class DevLogAgent:
         last_err = None
         
         for model in self.models:
-            url = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={GEMINI_API_KEY}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
             req = urllib.request.Request(
                 url, data=body,
                 headers={"Content-Type": "application/json"},
                 method="POST"
             )
-            for attempt in range(2):
-                try:
-                    with urllib.request.urlopen(req, timeout=20) as res:
-                        data = json.loads(res.read().decode("utf-8"))
-                        candidates = data.get("candidates", [])
-                        usage = data.get("usageMetadata", {})
-                        if candidates:
-                            parts = candidates[0].get("content", {}).get("parts", [])
-                            if parts:
-                                text = parts[0].get("text", "")
-                                p_cnt = usage.get("promptTokenCount", 0)
-                                c_cnt = usage.get("candidatesTokenCount", 0)
-                                self.session_usage["prompt_tokens"] += p_cnt
-                                self.session_usage["output_tokens"] += c_cnt
-                                self.session_usage["api_calls"] += 1
-                                return text, usage
-                except urllib.error.HTTPError as e:
-                    last_err = e
-                    if e.code == 429:
-                        time.sleep(2)
-                        continue
-                    else:
-                        break
-                except Exception as e:
-                    last_err = e
-                    break
-                    
+            try:
+                with urllib.request.urlopen(req, timeout=20) as res:
+                    data = json.loads(res.read().decode("utf-8"))
+                    candidates = data.get("candidates", [])
+                    usage = data.get("usageMetadata", {})
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts:
+                            text = parts[0].get("text", "")
+                            p_cnt = usage.get("promptTokenCount", 0)
+                            c_cnt = usage.get("candidatesTokenCount", 0)
+                            self.session_usage["prompt_tokens"] += p_cnt
+                            self.session_usage["output_tokens"] += c_cnt
+                            self.session_usage["api_calls"] += 1
+                            return text, usage
+            except urllib.error.HTTPError as e:
+                last_err = e
+                if e.code == 429:
+                    # 일시적 쿼터 초과 시 0.5초 후 가용 라이트 모델로 즉시 전환
+                    time.sleep(0.5)
+                    continue
+                else:
+                    continue
+            except Exception as e:
+                last_err = e
+                continue
+                
         raise RuntimeError(f"Gemini API 호출에 실패했습니다: {last_err}")
 
     def execute_tool(self, tool_name: str, args: dict) -> dict:
