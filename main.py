@@ -57,6 +57,9 @@ def run_cli_loop():
             os.system("clear")
             print_banner()
             continue
+        elif user_input.lower() in ["--help", "-h", "help"]:
+            print_banner()
+            continue
         elif user_input.lower() == "setup":
             console.print("[bold yellow]노션 데이터베이스 속성 동기화를 진행합니다...[/bold yellow]")
             res = auto_setup_database_properties()
@@ -89,6 +92,10 @@ def run_cli_loop():
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         cmd = sys.argv[1].lower()
+        if cmd in ["--help", "-h", "help"]:
+            print_banner()
+            sys.exit(0)
+            
         agent = DevLogAgent()
         
         if cmd == "commit":
