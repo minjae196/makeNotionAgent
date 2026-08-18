@@ -22,21 +22,22 @@ TOOL_FUNCTIONS = {
 
 TOOLS_PROMPT = """
 [사용 가능한 도구(Tools) 목록]
-1. `get_latest_commit_info(repo_path="..")`: 최근 Git 커밋 내역(diff, commit message, repo_name 등) 조회
-2. `get_working_diff(repo_path="..")`: 현재 작업 중인 코드 변경사항(diff, repo_name) 조회
-3. `scan_repository_overview(target_dir="..")`: 레포지토리 폴더 구조 및 주요 설정 파일 스캔
-4. `read_code_file(file_path="...")`: 특정 소스 코드 파일 내용 읽기
+1. `scan_repository_overview(target_dir="..")`: 레포지토리 폴더 구조 및 주요 설정 파일 스캔
+2. `read_code_file(file_path="...")`: 특정 소스 코드 파일 내용 읽기
+3. `get_latest_commit_info(repo_path="..")`: 최근 Git 커밋 내역(diff, commit message, repo_name 등) 조회
+4. `get_working_diff(repo_path="..")`: 현재 작업 중인 코드 변경사항(diff, repo_name) 조회
 5. `create_notion_record(title="...", repo_name="...", category="Commit Log|Repo Analysis|Code Summary|Architecture|Dev Note", markdown_content="...", tags=["..."])`: 노션 데이터베이스에 페이지 생성
 
-[도구 호출 규칙]
-도구를 호출할 때는 반드시 아래와 같이 단일 JSON 블록만 출력하세요:
+[도구 호출 규칙 (매우 중요)]
+- 사용자가 분석이나 조사를 요구하면 인사말을 하지 말고, 반드시 1단계에서 적절한 도구 호출 JSON을 즉시 출력하세요.
+- 도구를 호출할 때는 반드시 아래 형식의 JSON 블록만 출력해야 합니다:
 ```json
 {
   "tool": "도구이름",
   "args": { "인자명": "값" }
 }
 ```
-분석과 노션 작성이 모두 완료되어 사용자에게 최종 안내할 때는 JSON 없이 일반 마크다운 텍스트로 전문적으로 답변하세요.
+- 모든 도구 실행과 `create_notion_record` 호출이 완료된 후에만 사용자에게 최종 완료 안내 마크다운 텍스트를 출력하세요.
 """
 
 class DevLogAgent:
@@ -157,7 +158,6 @@ class DevLogAgent:
                 if "tool" in data:
                     return data
             except Exception:
-                # 개행 문자나 이스케이프 오류 교정 시도
                 try:
                     cleaned = re.sub(r'[\r\n\t]', ' ', candidate)
                     data = json.loads(cleaned, strict=False)
@@ -166,10 +166,9 @@ class DevLogAgent:
                 except Exception:
                     pass
 
-        # 3. 정규표현식으로 create_notion_record 등 도구명 직접 추출
+        # 3. 정규표현식으로 create_notion_record 직접 파싱
         if '"tool": "create_notion_record"' in text or "'tool': 'create_notion_record'" in text:
             try:
-                # regex로 title, category, markdown_content 추출 시도
                 title_match = re.search(r'"title"\s*:\s*"([^"]+)"', text)
                 repo_match = re.search(r'"repo_name"\s*:\s*"([^"]+)"', text)
                 cat_match = re.search(r'"category"\s*:\s*"([^"]+)"', text)
@@ -201,7 +200,7 @@ class DevLogAgent:
             {"role": "user", "parts": [{"text": user_msg}]}
         ]
         
-        MAX_TURNS = 6
+        MAX_TURNS = 7
         turn = 0
         turn_total_usage = {"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0}
         
@@ -220,6 +219,15 @@ class DevLogAgent:
 
             tool_call = self.extract_tool_call(llm_response)
             
+            # 첫 턴인데 도구를 안 부르고 인사말만 한 경우, 도구 호출을 다시 강제
+            if not tool_call and turn == 1 and any(k in user_msg.lower() for k in ["scan", "스캔", "분석", "commit", "커밋", "sum", "요약"]):
+                contents.append({"role": "model", "parts": [{"text": llm_response}]})
+                contents.append({
+                    "role": "user",
+                    "parts": [{"text": "인사말 대신 실제 코드/디렉터리 데이터를 수집할 수 있도록 적절한 도구(scan_repository_overview, read_code_file, get_latest_commit_info)를 호출하는 JSON을 즉시 출력하십시오."}]
+                })
+                continue
+
             # 도구 호출이 없는 경우 = 최종 사용자 답변
             if not tool_call:
                 display_final_response(llm_response)
@@ -240,6 +248,6 @@ class DevLogAgent:
             contents.append({
                 "role": "user",
                 "parts": [{
-                    "text": f"[도구 '{tool_name}' 실행 결과]\n{json.dumps(tool_result, ensure_ascii=False)}\n\n위 결과를 바탕으로 필요한 다음 도구를 호출하거나 최종 기술 문서를 작성해주세요."
+                    "text": f"[도구 '{tool_name}' 실행 결과]\n{json.dumps(tool_result, ensure_ascii=False)}\n\n위 결과를 바탕으로 추가 조사가 필요하면 read_code_file 등을 호출하고, 분석이 완료되었으면 create_notion_record 도구를 호출하여 노션에 기술 문서를 등록하세요."
                 }]
             })
