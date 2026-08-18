@@ -77,15 +77,15 @@ def run_cli_loop():
             install_git_hook(target)
             continue
         elif user_input.lower() == "commit":
-            user_input = "도구 get_latest_commit_info()를 호출하여 최근 커밋의 변경 내역(diff)을 수집하고 노션에 기술 문서로 기록해주세요."
+            user_input = "도구 get_latest_commit_info()를 호출하여 최근 커밋의 diff와 메시지를 수집하고, category='Commit Log' 및 '[Commit] 커밋메시지 (해시)' 형식의 제목으로 노션에 기록해주세요."
         elif user_input.lower().startswith("scan"):
             parts = user_input.split(maxsplit=1)
             target = parts[1] if len(parts) > 1 else "."
-            user_input = f"도구 scan_repository_overview(target_dir='{target}')를 즉시 호출하여 디렉터리 구조와 주요 설정 파일을 수집하고 아키텍처 다이어그램과 함께 노션에 기록해주세요."
+            user_input = f"도구 scan_repository_overview(target_dir='{target}')를 즉시 호출하여 디렉터리 구조와 주요 설정 파일을 수집하고, category='Repo Analysis'로 아키텍처 다이어그램과 함께 노션에 기록해주세요."
         elif user_input.lower().startswith("sum"):
             parts = user_input.split(maxsplit=1)
             target = parts[1] if len(parts) > 1 else "."
-            user_input = f"도구 read_code_file(file_path='{target}')를 즉시 호출하여 소스 코드를 읽고 주요 구현 로직, 시각화, 개선 보완점을 노션에 기록해주세요."
+            user_input = f"도구 read_code_file(file_path='{target}')를 즉시 호출하여 소스 코드를 읽고, category='Code Summary'로 주요 구현 로직과 개선점을 노션에 기록해주세요."
 
         if not user_input.strip():
             continue
@@ -102,13 +102,13 @@ if __name__ == "__main__":
         agent = DevLogAgent()
         
         if cmd == "commit":
-            agent.chat_turn("도구 get_latest_commit_info()를 호출하여 최근 커밋의 변경 내역(diff)을 수집하고 노션에 기술 문서로 기록해주세요.")
+            agent.chat_turn("도구 get_latest_commit_info()를 호출하여 최근 커밋의 diff와 메시지를 수집하고, category='Commit Log' 및 '[Commit] 커밋메시지 (해시)' 형식의 제목으로 노션에 기록해주세요.")
         elif cmd == "scan":
             target = sys.argv[2] if len(sys.argv) > 2 else "."
-            agent.chat_turn(f"도구 scan_repository_overview(target_dir='{target}')를 즉시 호출하여 디렉터리 구조와 주요 설정 파일을 수집하고 아키텍처 다이어그램과 함께 노션에 기록해주세요.")
+            agent.chat_turn(f"도구 scan_repository_overview(target_dir='{target}')를 즉시 호출하여 디렉터리 구조와 주요 설정 파일을 수집하고, category='Repo Analysis'로 아키텍처 다이어그램과 함께 노션에 기록해주세요.")
         elif cmd in ["sum", "summarize"]:
             target = sys.argv[2] if len(sys.argv) > 2 else "."
-            agent.chat_turn(f"도구 read_code_file(file_path='{target}')를 즉시 호출하여 소스 코드를 읽고 주요 구현 로직, 시각화, 개선 보완점을 노션에 기록해주세요.")
+            agent.chat_turn(f"도구 read_code_file(file_path='{target}')를 즉시 호출하여 소스 코드를 읽고, category='Code Summary'로 주요 구현 로직과 개선점을 노션에 기록해주세요.")
         elif cmd == "setup":
             res = auto_setup_database_properties()
             print(res)
