@@ -1,0 +1,12 @@
+# 환경 변수 및 시크릿 키 보호
+.env
+.env.*
+!.env.example
+*.env
+
+# Python 캐시 및 로그
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+.DS_Store
