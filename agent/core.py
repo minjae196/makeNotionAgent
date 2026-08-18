@@ -28,8 +28,7 @@ TOOLS_PROMPT = """
 4. `get_working_diff(repo_path="..")`: 현재 작업 중인 코드 변경사항(diff, repo_name) 조회
 5. `create_notion_record(title="...", repo_name="...", category="Commit Log|Repo Analysis|Code Summary|Architecture|Dev Note", markdown_content="...", tags=["..."])`: 노션 데이터베이스에 페이지 생성
 
-[도구 호출 규칙 (매우 중요)]
-- 사용자가 분석이나 조사를 요구하면 인사말을 하지 말고, 반드시 1단계에서 적절한 도구 호출 JSON을 즉시 출력하세요.
+[도구 호출 규칙]
 - 도구를 호출할 때는 반드시 아래 형식의 JSON 블록만 출력해야 합니다:
 ```json
 {
@@ -37,7 +36,6 @@ TOOLS_PROMPT = """
   "args": { "인자명": "값" }
 }
 ```
-- 문서를 작성할 때는 짧게 요약하지 말고, 각 컴포넌트의 역할, 로직 흐름, 구체적인 코드 리뷰와 개선 제안을 포함하여 풍부하고 상세한(In-depth) 기술 문서로 작성하세요.
 - 모든 도구 실행과 `create_notion_record` 호출이 완료된 후에만 사용자에게 최종 완료 안내 마크다운 텍스트를 출력하세요.
 """
 
@@ -46,9 +44,10 @@ class DevLogAgent:
         preferred = GEMINI_MODEL if GEMINI_MODEL.startswith("models/") else f"models/{GEMINI_MODEL}"
         candidate_list = [
             preferred,
+            "models/gemini-2.5-flash",
+            "models/gemini-2.0-flash",
             "models/gemini-3-flash-preview",
-            "models/gemini-3.7-flash",
-            "models/gemini-3.1-flash-lite-preview"
+            "models/gemini-3.7-flash"
         ]
         self.models = list(dict.fromkeys(candidate_list))
         self.session_usage = {
@@ -85,7 +84,7 @@ class DevLogAgent:
                 method="POST"
             )
             try:
-                with urllib.request.urlopen(req, timeout=15) as res:
+                with urllib.request.urlopen(req, timeout=20) as res:
                     data = json.loads(res.read().decode("utf-8"))
                     candidates = data.get("candidates", [])
                     usage = data.get("usageMetadata", {})
@@ -137,56 +136,89 @@ class DevLogAgent:
         if not text:
             return None
             
-        # 1. 마크다운 코드 블록
+        # 1. 표준 json.loads 시도
         pattern = r"```(?:json)?\s*(\{[\s\S]*?\})\s*```"
         match = re.search(pattern, text)
+        candidates = []
         if match:
-            raw = match.group(1)
-            try:
-                data = json.loads(raw, strict=False)
-                if "tool" in data:
-                    return data
-            except Exception:
-                pass
-
-        # 2. 본문 전체 최외곽 JSON
+            candidates.append(match.group(1))
+            
         start_idx = text.find("{")
         end_idx = text.rfind("}")
         if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-            candidate = text[start_idx:end_idx+1]
+            candidates.append(text[start_idx:end_idx+1])
+            
+        for cand in candidates:
             try:
-                data = json.loads(candidate, strict=False)
-                if "tool" in data:
+                data = json.loads(cand, strict=False)
+                if isinstance(data, dict) and "tool" in data:
                     return data
             except Exception:
-                try:
-                    cleaned = re.sub(r'[\r\n\t]', ' ', candidate)
-                    data = json.loads(cleaned, strict=False)
-                    if "tool" in data:
-                        return data
-                except Exception:
-                    pass
+                pass
 
-        # 3. 정규표현식 백업 파싱
-        if '"tool": "create_notion_record"' in text or "'tool': 'create_notion_record'" in text:
+        # 2. create_notion_record 전용 안전 파서
+        if "create_notion_record" in text:
             try:
-                title_match = re.search(r'"title"\s*:\s*"([^"]+)"', text)
-                repo_match = re.search(r'"repo_name"\s*:\s*"([^"]+)"', text)
-                cat_match = re.search(r'"category"\s*:\s*"([^"]+)"', text)
-                content_match = re.search(r'"markdown_content"\s*:\s*"([\s\S]+?)"\s*,\s*"(?:tags|repo_name)', text)
+                title_m = re.search(r'["\']title["\']\s*:\s*["\']([^"\']+)["\']', text)
+                repo_m = re.search(r'["\']repo_name["\']\s*:\s*["\']([^"\']+)["\']', text)
+                cat_m = re.search(r'["\']category["\']\s*:\s*["\']([^"\']+)["\']', text)
                 
-                if title_match and cat_match and content_match:
-                    return {
-                        "tool": "create_notion_record",
-                        "args": {
-                            "title": title_match.group(1),
-                            "repo_name": repo_match.group(1) if repo_match else "default",
-                            "category": cat_match.group(1),
-                            "markdown_content": content_match.group(1).replace("\\n", "\n").replace('\\"', '"')
+                # tags 파싱
+                tags = []
+                tags_idx = text.find('"tags"')
+                if tags_idx != -1:
+                    tags_block = text[tags_idx:text.find(']', tags_idx)+1]
+                    tags = re.findall(r'["\']([^"\'\[\],]+)["\']', tags_block)
+                    if tags and tags[0] == "tags":
+                        tags = tags[1:]
+
+                # markdown_content 파싱 (문자열 내 unescaped quote/newline 완벽 복원)
+                content_idx = text.find('"markdown_content"')
+                if content_idx == -1:
+                    content_idx = text.find("'markdown_content'")
+                    
+                if content_idx != -1:
+                    sub = text[content_idx:]
+                    first_colon = sub.find(':')
+                    after_colon = sub[first_colon+1:].lstrip()
+                    if after_colon.startswith('"') or after_colon.startswith("'"):
+                        quote_char = after_colon[0]
+                        body_start = 1
+                        # find matching closing quote before the end of JSON
+                        last_brace = after_colon.rfind('}')
+                        last_quote = after_colon.rfind(quote_char, 0, last_brace if last_brace != -1 else len(after_colon))
+                        raw_content = after_colon[body_start:last_quote if last_quote > body_start else len(after_colon)]
+                        
+                        cleaned = (raw_content
+                                   .replace('\\n', '\n')
+                                   .replace('\\"', '"')
+                                   .replace("\\'", "'")
+                                   .replace('\\\\', '\\'))
+                        
+                        return {
+                            "tool": "create_notion_record",
+                            "args": {
+                                "title": title_m.group(1) if title_m else "시스템 아키텍처 분석 보고서",
+                                "repo_name": repo_m.group(1) if repo_m else "default",
+                                "category": cat_m.group(1) if cat_m else "Repo Analysis",
+                                "tags": tags if tags else ["Architecture"],
+                                "markdown_content": cleaned
+                            }
                         }
-                    }
             except Exception:
                 pass
+
+        # 3. 기타 일반 도구(scan_repository_overview 등) fallback
+        for tool_name in ["scan_repository_overview", "read_code_file", "get_latest_commit_info", "get_working_diff"]:
+            if f'"{tool_name}"' in text or f"'{tool_name}'" in text:
+                try:
+                    # 간단한 args 추출
+                    target_m = re.search(r'["\'](?:target_dir|file_path|repo_path)["\']\s*:\s*["\']([^"\']+)["\']', text)
+                    param_name = "target_dir" if tool_name == "scan_repository_overview" else ("file_path" if tool_name == "read_code_file" else "repo_path")
+                    args = {param_name: target_m.group(1)} if target_m else {}
+                    return {"tool": tool_name, "args": args}
+                except Exception:
+                    pass
 
         return None
 
