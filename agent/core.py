@@ -43,13 +43,13 @@ TOOLS_PROMPT = """
 
 class DevLogAgent:
     def __init__(self):
-        # 500 RPD 무료 넉넉한 쿼터를 가진 Gemini 3.1 Flash Lite를 1순위로 배치
+        # 최신 최상위 플래그십 모델(Gemini 3.7 Flash & Gemini 3 Flash)을 1순위로 배치
         self.models = [
-            "gemini-3.1-flash-lite",
-            "gemini-flash-lite-latest",
-            "gemini-3.5-flash-lite",
-            "gemini-3.6-flash",
-            "gemini-flash-latest"
+            "gemini-3.7-flash",
+            "gemini-3-flash-preview",
+            "gemini-3.1-pro-preview",
+            "gemini-flash-latest",
+            "gemini-3.1-flash-lite"
         ]
         self.session_usage = {
             "prompt_tokens": 0,
@@ -58,7 +58,7 @@ class DevLogAgent:
         }
 
     def call_gemini_api(self, contents: list, system_text: str = "") -> tuple:
-        """Gemini REST API를 호출하며 429 발생 시 즉시 가용 모델로 자동 페일오버합니다."""
+        """Gemini REST API를 호출하며 429 발생 시 가용 모델로 자동 페일오버합니다."""
         if not GEMINI_API_KEY:
             raise ValueError("GEMINI_API_KEY가 설정되지 않았습니다.")
             
@@ -85,7 +85,7 @@ class DevLogAgent:
                 method="POST"
             )
             try:
-                with urllib.request.urlopen(req, timeout=20) as res:
+                with urllib.request.urlopen(req, timeout=25) as res:
                     data = json.loads(res.read().decode("utf-8"))
                     candidates = data.get("candidates", [])
                     usage = data.get("usageMetadata", {})
@@ -238,7 +238,7 @@ class DevLogAgent:
         
         while turn < MAX_TURNS:
             turn += 1
-            spinner_text = "코드를 심층 분석하고 아키텍처 다이어그램을 설계하는 중..." if turn == 1 else "심층 분석 결과를 바탕으로 고품질 기술 문서를 작성하는 중..."
+            spinner_text = "최신 Gemini 3.7 엔진으로 코드를 심층 분석하는 중..." if turn == 1 else "심층 분석 결과를 바탕으로 고품질 기술 문서를 작성하는 중..."
             with get_status_spinner(spinner_text):
                 try:
                     llm_response, usage = self.call_gemini_api(contents, full_system)
