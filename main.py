@@ -2,7 +2,7 @@ import sys
 import os
 from pathlib import Path
 from config import NOTION_API_KEY, NOTION_DATABASE_ID, GEMINI_API_KEY
-from agent.ui import print_banner, get_user_input, console
+from agent.ui import print_banner, get_user_input, display_session_token_summary, console
 from agent.core import DevLogAgent
 from tools.notion_tool import get_database_info, auto_setup_database_properties
 
@@ -59,6 +59,9 @@ def run_cli_loop():
             continue
         elif user_input.lower() in ["--help", "-h", "help"]:
             print_banner()
+            continue
+        elif user_input.lower() in ["tokens", "usage", "token"]:
+            display_session_token_summary(agent.session_usage)
             continue
         elif user_input.lower() == "setup":
             console.print("[bold yellow]노션 데이터베이스 속성 동기화를 진행합니다...[/bold yellow]")

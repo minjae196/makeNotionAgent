@@ -8,7 +8,8 @@ from tools.git_tool import get_latest_commit_info, get_working_diff
 from tools.code_tool import scan_repository_overview, read_code_file
 from agent.ui import (
     get_status_spinner, display_tool_call, display_tool_result,
-    display_final_response, console
+    display_final_response, display_token_usage, display_session_token_summary,
+    console
 )
 
 TOOL_FUNCTIONS = {
@@ -25,7 +26,7 @@ TOOLS_PROMPT = """
 2. `get_working_diff(repo_path="..")`: 현재 작업 중인 코드 변경사항(diff, repo_name) 조회
 3. `scan_repository_overview(target_dir="..")`: 레포지토리 폴더 구조 및 주요 설정 파일 스캔
 4. `read_code_file(file_path="...")`: 특정 소스 코드 파일 내용 읽기
-5. `create_notion_record(title="...", repo_name="...", category="Commit Log|Repo Analysis|Code Summary|Architecture|Dev Note", markdown_content="...", tags=["..."])`: 노션 데이터베이스에 페이지 생성 (Mermaid 다이어그램 시각화 포함 가능)
+5. `create_notion_record(title="...", repo_name="...", category="Commit Log|Repo Analysis|Code Summary|Architecture|Dev Note", markdown_content="...", tags=["..."])`: 노션 데이터베이스에 페이지 생성
 
 [도구 호출 규칙]
 도구를 호출할 때는 반드시 아래와 같이 단일 JSON 블록만 출력하세요:
@@ -48,9 +49,14 @@ class DevLogAgent:
             "models/gemini-3.1-flash-lite-preview"
         ]
         self.models = list(dict.fromkeys(candidate_list))
+        self.session_usage = {
+            "prompt_tokens": 0,
+            "output_tokens": 0,
+            "api_calls": 0
+        }
 
-    def call_gemini_api(self, contents: list, system_text: str = "") -> str:
-        """Gemini REST API를 직접 호출합니다."""
+    def call_gemini_api(self, contents: list, system_text: str = "") -> tuple:
+        """Gemini REST API를 직접 호출하고 텍스트 및 사용 토큰 메타데이터를 반환합니다."""
         if not GEMINI_API_KEY:
             raise ValueError("GEMINI_API_KEY가 설정되지 않았습니다.")
             
@@ -80,10 +86,20 @@ class DevLogAgent:
                 with urllib.request.urlopen(req, timeout=10) as res:
                     data = json.loads(res.read().decode("utf-8"))
                     candidates = data.get("candidates", [])
+                    usage = data.get("usageMetadata", {})
                     if candidates:
                         parts = candidates[0].get("content", {}).get("parts", [])
                         if parts:
-                            return parts[0].get("text", "")
+                            text = parts[0].get("text", "")
+                            
+                            # 세션 토큰 누적 업데이트
+                            p_cnt = usage.get("promptTokenCount", 0)
+                            c_cnt = usage.get("candidatesTokenCount", 0)
+                            self.session_usage["prompt_tokens"] += p_cnt
+                            self.session_usage["output_tokens"] += c_cnt
+                            self.session_usage["api_calls"] += 1
+                            
+                            return text, usage
             except Exception as e:
                 last_err = e
                 continue
@@ -147,13 +163,17 @@ class DevLogAgent:
         
         MAX_TURNS = 6
         turn = 0
+        turn_total_usage = {"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0}
         
         while turn < MAX_TURNS:
             turn += 1
             spinner_text = "코드를 분석하고 다이어그램을 설계하는 중..." if turn == 1 else "분석 결과를 기반으로 기술 문서를 작성하는 중..."
             with get_status_spinner(spinner_text):
                 try:
-                    llm_response = self.call_gemini_api(contents, full_system)
+                    llm_response, usage = self.call_gemini_api(contents, full_system)
+                    turn_total_usage["promptTokenCount"] += usage.get("promptTokenCount", 0)
+                    turn_total_usage["candidatesTokenCount"] += usage.get("candidatesTokenCount", 0)
+                    turn_total_usage["totalTokenCount"] += usage.get("totalTokenCount", 0)
                 except Exception as e:
                     display_final_response(f"LLM 호출 실패: {e}")
                     return
@@ -162,6 +182,8 @@ class DevLogAgent:
             
             if not tool_call:
                 display_final_response(llm_response)
+                # 최종 응답 출력 후 토큰 사용량 표시
+                display_token_usage(turn_total_usage, self.session_usage)
                 break
 
             tool_name = tool_call["tool"]
