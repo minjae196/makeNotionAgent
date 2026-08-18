@@ -83,7 +83,7 @@ class DevLogAgent:
                 method="POST"
             )
             try:
-                with urllib.request.urlopen(req, timeout=10) as res:
+                with urllib.request.urlopen(req, timeout=12) as res:
                     data = json.loads(res.read().decode("utf-8"))
                     candidates = data.get("candidates", [])
                     usage = data.get("usageMetadata", {})
@@ -92,7 +92,6 @@ class DevLogAgent:
                         if parts:
                             text = parts[0].get("text", "")
                             
-                            # 세션 토큰 누적 업데이트
                             p_cnt = usage.get("promptTokenCount", 0)
                             c_cnt = usage.get("candidatesTokenCount", 0)
                             self.session_usage["prompt_tokens"] += p_cnt
@@ -132,22 +131,63 @@ class DevLogAgent:
         return result
 
     def extract_tool_call(self, text: str):
-        """텍스트에서 JSON 도구 호출 블록을 추출합니다."""
-        pattern = r"```json\s*(\{.*?\})\s*```"
-        match = re.search(pattern, text, re.DOTALL)
+        """텍스트에서 JSON 도구 호출 블록을 유연하고 강력하게 추출합니다."""
+        if not text:
+            return None
+            
+        # 1. 마크다운 코드 블록 (```json ... ``` 또는 ``` ... ```)
+        pattern = r"```(?:json)?\s*(\{[\s\S]*?\})\s*```"
+        match = re.search(pattern, text)
         if match:
+            raw = match.group(1)
             try:
-                data = json.loads(match.group(1))
+                data = json.loads(raw, strict=False)
                 if "tool" in data:
                     return data
             except Exception:
                 pass
-        try:
-            data = json.loads(text.strip())
-            if "tool" in data:
-                return data
-        except Exception:
-            pass
+
+        # 2. 본문 전체에서 { ... "tool" : ... } 형태의 최외곽 JSON 탐색
+        start_idx = text.find("{")
+        end_idx = text.rfind("}")
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            candidate = text[start_idx:end_idx+1]
+            try:
+                data = json.loads(candidate, strict=False)
+                if "tool" in data:
+                    return data
+            except Exception:
+                # 개행 문자나 이스케이프 오류 교정 시도
+                try:
+                    cleaned = re.sub(r'[\r\n\t]', ' ', candidate)
+                    data = json.loads(cleaned, strict=False)
+                    if "tool" in data:
+                        return data
+                except Exception:
+                    pass
+
+        # 3. 정규표현식으로 create_notion_record 등 도구명 직접 추출
+        if '"tool": "create_notion_record"' in text or "'tool': 'create_notion_record'" in text:
+            try:
+                # regex로 title, category, markdown_content 추출 시도
+                title_match = re.search(r'"title"\s*:\s*"([^"]+)"', text)
+                repo_match = re.search(r'"repo_name"\s*:\s*"([^"]+)"', text)
+                cat_match = re.search(r'"category"\s*:\s*"([^"]+)"', text)
+                content_match = re.search(r'"markdown_content"\s*:\s*"([\s\S]+?)"\s*,\s*"(?:tags|repo_name)', text)
+                
+                if title_match and cat_match and content_match:
+                    return {
+                        "tool": "create_notion_record",
+                        "args": {
+                            "title": title_match.group(1),
+                            "repo_name": repo_match.group(1) if repo_match else "default",
+                            "category": cat_match.group(1),
+                            "markdown_content": content_match.group(1).replace("\\n", "\n").replace('\\"', '"')
+                        }
+                    }
+            except Exception:
+                pass
+
         return None
 
     def chat_turn(self, user_msg: str):
@@ -180,12 +220,13 @@ class DevLogAgent:
 
             tool_call = self.extract_tool_call(llm_response)
             
+            # 도구 호출이 없는 경우 = 최종 사용자 답변
             if not tool_call:
                 display_final_response(llm_response)
-                # 최종 응답 출력 후 토큰 사용량 표시
                 display_token_usage(turn_total_usage, self.session_usage)
                 break
 
+            # 도구 호출 실행
             tool_name = tool_call["tool"]
             tool_args = tool_call.get("args", {})
             
