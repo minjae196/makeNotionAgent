@@ -37,6 +37,7 @@ TOOLS_PROMPT = """
   "args": { "인자명": "값" }
 }
 ```
+- 문서를 작성할 때는 짧게 요약하지 말고, 각 컴포넌트의 역할, 로직 흐름, 구체적인 코드 리뷰와 개선 제안을 포함하여 풍부하고 상세한(In-depth) 기술 문서로 작성하세요.
 - 모든 도구 실행과 `create_notion_record` 호출이 완료된 후에만 사용자에게 최종 완료 안내 마크다운 텍스트를 출력하세요.
 """
 
@@ -65,7 +66,7 @@ class DevLogAgent:
             "contents": contents,
             "generationConfig": {
                 "temperature": 0.2,
-                "maxOutputTokens": 4096
+                "maxOutputTokens": 8192
             }
         }
         if system_text:
@@ -84,7 +85,7 @@ class DevLogAgent:
                 method="POST"
             )
             try:
-                with urllib.request.urlopen(req, timeout=12) as res:
+                with urllib.request.urlopen(req, timeout=15) as res:
                     data = json.loads(res.read().decode("utf-8"))
                     candidates = data.get("candidates", [])
                     usage = data.get("usageMetadata", {})
@@ -111,9 +112,9 @@ class DevLogAgent:
         tool_descriptions = {
             "get_latest_commit_info": "Git 커밋 데이터 및 변경 Diff 수집 중...",
             "get_working_diff": "작업 중인 소스 코드 Diff 수집 중...",
-            "scan_repository_overview": "레포지토리 구조 및 설정 파일 스캔 중...",
-            "read_code_file": "소스 코드 내용 분석 중...",
-            "create_notion_record": "노션 문서 등록 및 다이어그램 블록 생성 중..."
+            "scan_repository_overview": "레포지토리 전 계층 심층 스캔 중...",
+            "read_code_file": "소스 코드 상세 내용 분석 중...",
+            "create_notion_record": "상세 기술 문서 및 다이어그램 노션 등록 중..."
         }
         status_msg = tool_descriptions.get(tool_name, f"도구 실행 중 ({tool_name})...")
         
@@ -136,7 +137,7 @@ class DevLogAgent:
         if not text:
             return None
             
-        # 1. 마크다운 코드 블록 (```json ... ``` 또는 ``` ... ```)
+        # 1. 마크다운 코드 블록
         pattern = r"```(?:json)?\s*(\{[\s\S]*?\})\s*```"
         match = re.search(pattern, text)
         if match:
@@ -148,7 +149,7 @@ class DevLogAgent:
             except Exception:
                 pass
 
-        # 2. 본문 전체에서 { ... "tool" : ... } 형태의 최외곽 JSON 탐색
+        # 2. 본문 전체 최외곽 JSON
         start_idx = text.find("{")
         end_idx = text.rfind("}")
         if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
@@ -166,7 +167,7 @@ class DevLogAgent:
                 except Exception:
                     pass
 
-        # 3. 정규표현식으로 create_notion_record 직접 파싱
+        # 3. 정규표현식 백업 파싱
         if '"tool": "create_notion_record"' in text or "'tool': 'create_notion_record'" in text:
             try:
                 title_match = re.search(r'"title"\s*:\s*"([^"]+)"', text)
@@ -206,7 +207,7 @@ class DevLogAgent:
         
         while turn < MAX_TURNS:
             turn += 1
-            spinner_text = "코드를 분석하고 다이어그램을 설계하는 중..." if turn == 1 else "분석 결과를 기반으로 기술 문서를 작성하는 중..."
+            spinner_text = "코드를 심층 분석하고 아키텍처 다이어그램을 설계하는 중..." if turn == 1 else "심층 분석 결과를 바탕으로 고품질 기술 문서를 작성하는 중..."
             with get_status_spinner(spinner_text):
                 try:
                     llm_response, usage = self.call_gemini_api(contents, full_system)
@@ -219,22 +220,19 @@ class DevLogAgent:
 
             tool_call = self.extract_tool_call(llm_response)
             
-            # 첫 턴인데 도구를 안 부르고 인사말만 한 경우, 도구 호출을 다시 강제
             if not tool_call and turn == 1 and any(k in user_msg.lower() for k in ["scan", "스캔", "분석", "commit", "커밋", "sum", "요약"]):
                 contents.append({"role": "model", "parts": [{"text": llm_response}]})
                 contents.append({
                     "role": "user",
-                    "parts": [{"text": "인사말 대신 실제 코드/디렉터리 데이터를 수집할 수 있도록 적절한 도구(scan_repository_overview, read_code_file, get_latest_commit_info)를 호출하는 JSON을 즉시 출력하십시오."}]
+                    "parts": [{"text": "인사말 대신 실제 코드 데이터를 수집할 수 있도록 적절한 도구(scan_repository_overview, read_code_file 등)를 호출하는 JSON을 즉시 출력하십시오."}]
                 })
                 continue
 
-            # 도구 호출이 없는 경우 = 최종 사용자 답변
             if not tool_call:
                 display_final_response(llm_response)
                 display_token_usage(turn_total_usage, self.session_usage)
                 break
 
-            # 도구 호출 실행
             tool_name = tool_call["tool"]
             tool_args = tool_call.get("args", {})
             
@@ -248,6 +246,6 @@ class DevLogAgent:
             contents.append({
                 "role": "user",
                 "parts": [{
-                    "text": f"[도구 '{tool_name}' 실행 결과]\n{json.dumps(tool_result, ensure_ascii=False)}\n\n위 결과를 바탕으로 추가 조사가 필요하면 read_code_file 등을 호출하고, 분석이 완료되었으면 create_notion_record 도구를 호출하여 노션에 기술 문서를 등록하세요."
+                    "text": f"[도구 '{tool_name}' 실행 결과]\n{json.dumps(tool_result, ensure_ascii=False)}\n\n위 결과를 바탕으로 피상적인 요약이 아닌, 각 계층의 역할, 핵심 로직, 구체적인 코드 리뷰/개선점을 포함한 상세하고 깊이 있는(In-depth) 기술 문서를 작성하여 create_notion_record 도구를 호출하세요."
                 }]
             })
