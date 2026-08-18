@@ -1,6 +1,8 @@
 import urllib.request
+import urllib.error
 import json
 import re
+import time
 from config import GEMINI_API_KEY, NOTION_API_KEY, GEMINI_MODEL
 from memory.persona import SYSTEM_PROMPT
 from tools.notion_tool import create_notion_record, get_database_info, auto_setup_database_properties
@@ -83,27 +85,33 @@ class DevLogAgent:
                 headers={"Content-Type": "application/json"},
                 method="POST"
             )
-            try:
-                with urllib.request.urlopen(req, timeout=20) as res:
-                    data = json.loads(res.read().decode("utf-8"))
-                    candidates = data.get("candidates", [])
-                    usage = data.get("usageMetadata", {})
-                    if candidates:
-                        parts = candidates[0].get("content", {}).get("parts", [])
-                        if parts:
-                            text = parts[0].get("text", "")
-                            
-                            p_cnt = usage.get("promptTokenCount", 0)
-                            c_cnt = usage.get("candidatesTokenCount", 0)
-                            self.session_usage["prompt_tokens"] += p_cnt
-                            self.session_usage["output_tokens"] += c_cnt
-                            self.session_usage["api_calls"] += 1
-                            
-                            return text, usage
-            except Exception as e:
-                last_err = e
-                continue
-                
+            for attempt in range(2):
+                try:
+                    with urllib.request.urlopen(req, timeout=20) as res:
+                        data = json.loads(res.read().decode("utf-8"))
+                        candidates = data.get("candidates", [])
+                        usage = data.get("usageMetadata", {})
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            if parts:
+                                text = parts[0].get("text", "")
+                                p_cnt = usage.get("promptTokenCount", 0)
+                                c_cnt = usage.get("candidatesTokenCount", 0)
+                                self.session_usage["prompt_tokens"] += p_cnt
+                                self.session_usage["output_tokens"] += c_cnt
+                                self.session_usage["api_calls"] += 1
+                                return text, usage
+                except urllib.error.HTTPError as e:
+                    last_err = e
+                    if e.code == 429:
+                        time.sleep(2)
+                        continue
+                    else:
+                        break
+                except Exception as e:
+                    last_err = e
+                    break
+                    
         raise RuntimeError(f"Gemini API 호출에 실패했습니다: {last_err}")
 
     def execute_tool(self, tool_name: str, args: dict) -> dict:
@@ -163,7 +171,6 @@ class DevLogAgent:
                 repo_m = re.search(r'["\']repo_name["\']\s*:\s*["\']([^"\']+)["\']', text)
                 cat_m = re.search(r'["\']category["\']\s*:\s*["\']([^"\']+)["\']', text)
                 
-                # tags 파싱
                 tags = []
                 tags_idx = text.find('"tags"')
                 if tags_idx != -1:
@@ -172,7 +179,6 @@ class DevLogAgent:
                     if tags and tags[0] == "tags":
                         tags = tags[1:]
 
-                # markdown_content 파싱 (문자열 내 unescaped quote/newline 완벽 복원)
                 content_idx = text.find('"markdown_content"')
                 if content_idx == -1:
                     content_idx = text.find("'markdown_content'")
@@ -184,7 +190,6 @@ class DevLogAgent:
                     if after_colon.startswith('"') or after_colon.startswith("'"):
                         quote_char = after_colon[0]
                         body_start = 1
-                        # find matching closing quote before the end of JSON
                         last_brace = after_colon.rfind('}')
                         last_quote = after_colon.rfind(quote_char, 0, last_brace if last_brace != -1 else len(after_colon))
                         raw_content = after_colon[body_start:last_quote if last_quote > body_start else len(after_colon)]
@@ -208,11 +213,10 @@ class DevLogAgent:
             except Exception:
                 pass
 
-        # 3. 기타 일반 도구(scan_repository_overview 등) fallback
+        # 3. 기타 일반 도구 fallback
         for tool_name in ["scan_repository_overview", "read_code_file", "get_latest_commit_info", "get_working_diff"]:
             if f'"{tool_name}"' in text or f"'{tool_name}'" in text:
                 try:
-                    # 간단한 args 추출
                     target_m = re.search(r'["\'](?:target_dir|file_path|repo_path)["\']\s*:\s*["\']([^"\']+)["\']', text)
                     param_name = "target_dir" if tool_name == "scan_repository_overview" else ("file_path" if tool_name == "read_code_file" else "repo_path")
                     args = {param_name: target_m.group(1)} if target_m else {}
