@@ -38,18 +38,17 @@ TOOLS_PROMPT = """
   "args": { "인자명": "값" }
 }
 ```
-- 모든 도구 실행과 `create_notion_record` 호출이 완료된 후에만 사용자에게 최종 완료 안내 마크다운 텍스트를 출력하세요.
+- 문서를 작성할 때 `create_notion_record`는 단 1회만 호출하여 종합 완성본 문서를 등록하세요.
 """
 
 class DevLogAgent:
     def __init__(self):
-        # 최신 최상위 플래그십 모델(Gemini 3.7 Flash & Gemini 3 Flash)을 1순위로 배치
         self.models = [
+            "gemini-3.1-flash-lite",
+            "gemini-flash-lite-latest",
             "gemini-3.7-flash",
             "gemini-3-flash-preview",
-            "gemini-3.1-pro-preview",
-            "gemini-flash-latest",
-            "gemini-3.1-flash-lite"
+            "gemini-flash-latest"
         ]
         self.session_usage = {
             "prompt_tokens": 0,
@@ -232,13 +231,13 @@ class DevLogAgent:
             {"role": "user", "parts": [{"text": user_msg}]}
         ]
         
-        MAX_TURNS = 7
+        MAX_TURNS = 5
         turn = 0
         turn_total_usage = {"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0}
         
         while turn < MAX_TURNS:
             turn += 1
-            spinner_text = "최신 Gemini 3.7 엔진으로 코드를 심층 분석하는 중..." if turn == 1 else "심층 분석 결과를 바탕으로 고품질 기술 문서를 작성하는 중..."
+            spinner_text = "코드를 심층 분석하고 아키텍처 다이어그램을 설계하는 중..." if turn == 1 else "심층 분석 결과를 바탕으로 고품질 기술 문서를 작성하는 중..."
             with get_status_spinner(spinner_text):
                 try:
                     llm_response, usage = self.call_gemini_api(contents, full_system)
@@ -274,9 +273,22 @@ class DevLogAgent:
             
             tool_result = self.execute_tool(tool_name, tool_args)
             
+            # 노션 문서 생성이 성공하면 중복 생성 없이 즉시 루프 완료!
+            if tool_name == "create_notion_record" and tool_result.get("ok"):
+                final_summary = (
+                    f"### 📋 노션 기술 문서 등록 완료\n\n"
+                    f"- **문서 제목**: {tool_result.get('title', '')}\n"
+                    f"- **소속 저장소**: `{tool_result.get('repo_name', '')}`\n"
+                    f"- **노션 링크**: [페이지 바로가기]({tool_result.get('page_url', '')})\n\n"
+                    "시스템 아키텍처 분석 및 시각화 다이어그램, 코드 리뷰 개선 사항이 노션에 성공적으로 기록되었습니다."
+                )
+                display_final_response(final_summary)
+                display_token_usage(turn_total_usage, self.session_usage)
+                break
+
             contents.append({
                 "role": "user",
                 "parts": [{
-                    "text": f"[도구 '{tool_name}' 실행 결과]\n{json.dumps(tool_result, ensure_ascii=False)}\n\n위 결과를 바탕으로 피상적인 요약이 아닌, 각 계층의 역할, 핵심 로직, 구체적인 코드 리뷰/개선점을 포함한 상세하고 깊이 있는(In-depth) 기술 문서를 작성하여 create_notion_record 도구를 호출하세요."
+                    "text": f"[도구 '{tool_name}' 실행 결과]\n{json.dumps(tool_result, ensure_ascii=False)}\n\n위 분석 결과를 바탕으로 create_notion_record 도구를 1회 호출하여 노션에 최종 기술 문서를 등록하세요."
                 }]
             })
