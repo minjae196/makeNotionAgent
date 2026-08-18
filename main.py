@@ -9,14 +9,38 @@ from tools.notion_tool import get_database_info, auto_setup_database_properties
 def check_env_status():
     """환경변수 상태를 점검합니다."""
     missing = []
-    if not NOTION_API_KEY or "your_notion" in NOTION_API_KEY:
+    if not NOTION_API_KEY:
         missing.append("NOTION_API_KEY")
-    if not GEMINI_API_KEY or "your_gemini" in GEMINI_API_KEY:
+    if not GEMINI_API_KEY:
         missing.append("GEMINI_API_KEY")
         
     if missing:
-        console.print(f"[bold red]⚠️  환경 변수 미설정:[/bold red] {', '.join(missing)}")
-        console.print("[dim]`makeNotionAgent/.env` 파일에 API 키를 입력해 주세요.[/dim]\n")
+        console.print(f"[bold red]환경 변수 미설정:[/bold red] {', '.join(missing)}")
+        console.print("[dim].env 파일에 API 키를 입력해 주세요.[/dim]\n")
+
+def install_git_hook(target_repo: str = "."):
+    """지정된 Git 저장소에 post-commit 자동 기록 훅을 설치합니다."""
+    base = Path(target_repo).resolve()
+    git_dir = base / ".git"
+    if not git_dir.exists():
+        console.print(f"[bold red][Error][/bold red] '{target_repo}' 경로는 Git 저장소가 아닙니다.")
+        return
+        
+    hooks_dir = git_dir / "hooks"
+    hooks_dir.mkdir(exist_ok=True)
+    post_commit_path = hooks_dir / "post-commit"
+    
+    agent_main = Path(__file__).resolve()
+    hook_script = f"""#!/bin/bash
+# Notion DevLog Agent 자동 발동 훅
+python3 "{agent_main}" commit &
+"""
+    with open(post_commit_path, "w", encoding="utf-8") as f:
+        f.write(hook_script)
+        
+    os.chmod(post_commit_path, 0o755)
+    console.print(f"[bold green][Success][/bold green] '{base.name}' 저장소에 Git 커밋 자동 기록 훅(post-commit)이 설치되었습니다.")
+    console.print("[dim]이제 git commit 명령을 실행할 때마다 에이전트가 백그라운드에서 노션에 자동 기록합니다.[/dim]")
 
 def run_cli_loop():
     print_banner()
@@ -27,30 +51,35 @@ def run_cli_loop():
     while True:
         user_input = get_user_input()
         if user_input.lower() in ["exit", "quit", "q"]:
-            console.print("[bold cyan]👋 에이전트를 종료합니다. 즐거운 코딩 되세요![/bold cyan]")
+            console.print("[bold cyan]에이전트를 종료합니다.[/bold cyan]")
             break
         elif user_input.lower() in ["clear", "cls"]:
             os.system("clear")
             print_banner()
             continue
         elif user_input.lower() == "setup":
-            console.print("[bold yellow]⚙️ 노션 데이터베이스 연결 확인 및 속성 정리를 진행합니다...[/bold yellow]")
+            console.print("[bold yellow]노션 데이터베이스 속성 동기화를 진행합니다...[/bold yellow]")
             res = auto_setup_database_properties()
             if res.get("ok"):
-                console.print(f"[bold green]✅ {res.get('message')}[/bold green]")
+                console.print(f"[bold green]{res.get('message')}[/bold green]")
             else:
-                console.print(f"[bold red]❌ {res.get('error')}[/bold red]")
+                console.print(f"[bold red]{res.get('error')}[/bold red]")
+            continue
+        elif user_input.lower().startswith("install-hook") or user_input.lower().startswith("hook"):
+            parts = user_input.split(maxsplit=1)
+            target = parts[1] if len(parts) > 1 else "."
+            install_git_hook(target)
             continue
         elif user_input.lower() == "commit":
-            user_input = "최근 Git 커밋 변경사항을 분석해서 내 말투로 노션에 기록해줘."
+            user_input = "최근 Git 커밋 변경사항을 분석하여 구조화된 기술 문서로 노션에 기록해주세요."
         elif user_input.lower().startswith("scan"):
             parts = user_input.split(maxsplit=1)
             target = parts[1] if len(parts) > 1 else "."
-            user_input = f"'{target}' 디렉터리의 레포지토리 구조와 핵심 아키텍처를 분석해서 가독성 좋게 노션에 기록해줘."
+            user_input = f"'{target}' 디렉터리의 레포지토리 구조와 핵심 아키텍처를 분석하여 시각화 다이어그램과 함께 노션에 기록해주세요."
         elif user_input.lower().startswith("sum"):
             parts = user_input.split(maxsplit=1)
             target = parts[1] if len(parts) > 1 else "."
-            user_input = f"'{target}' 코드를 정확하게 요약하고 로직 흐름을 분석해서 노션에 기록해줘."
+            user_input = f"'{target}' 코드를 정밀 분석하여 주요 구현 로직, 아키텍처 시각화, 개선 보완점을 노션에 기술 문서로 기록해주세요."
 
         if not user_input.strip():
             continue
@@ -63,16 +92,19 @@ if __name__ == "__main__":
         agent = DevLogAgent()
         
         if cmd == "commit":
-            agent.chat_turn("최근 Git 커밋 변경사항을 분석해서 내 말투로 노션에 기록해줘.")
+            agent.chat_turn("최근 Git 커밋 변경사항을 분석하여 구조화된 기술 문서로 노션에 기록해주세요.")
         elif cmd == "scan":
             target = sys.argv[2] if len(sys.argv) > 2 else "."
-            agent.chat_turn(f"'{target}' 디렉터리의 레포지토리 구조와 핵심 아키텍처를 분석해서 가독성 좋게 노션에 기록해줘.")
+            agent.chat_turn(f"'{target}' 디렉터리의 레포지토리 구조와 핵심 아키텍처를 분석하여 시각화 다이어그램과 함께 노션에 기록해주세요.")
         elif cmd in ["sum", "summarize"]:
             target = sys.argv[2] if len(sys.argv) > 2 else "."
-            agent.chat_turn(f"'{target}' 코드를 정확하게 요약하고 로직 흐름을 분석해서 노션에 기록해줘.")
+            agent.chat_turn(f"'{target}' 코드를 정밀 분석하여 주요 구현 로직, 아키텍처 시각화, 개선 보완점을 노션에 기술 문서로 기록해주세요.")
         elif cmd == "setup":
             res = auto_setup_database_properties()
             print(res)
+        elif cmd in ["install-hook", "hook"]:
+            target = sys.argv[2] if len(sys.argv) > 2 else "."
+            install_git_hook(target)
         else:
             agent.chat_turn(" ".join(sys.argv[1:]))
     else:
