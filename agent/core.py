@@ -43,13 +43,13 @@ TOOLS_PROMPT = """
 
 class DevLogAgent:
     def __init__(self):
-        # 검증된 안정 모델 목록 (기본 Flash 및 Lite 페일오버 풀)
+        # 500 RPD 무료 넉넉한 쿼터를 가진 Gemini 3.1 Flash Lite를 1순위로 배치
         self.models = [
-            "gemini-flash-latest",
-            "gemini-flash-lite-latest",
             "gemini-3.1-flash-lite",
-            "gemini-3-flash-preview",
-            "gemini-3.7-flash"
+            "gemini-flash-lite-latest",
+            "gemini-3.5-flash-lite",
+            "gemini-3.6-flash",
+            "gemini-flash-latest"
         ]
         self.session_usage = {
             "prompt_tokens": 0,
@@ -102,7 +102,6 @@ class DevLogAgent:
             except urllib.error.HTTPError as e:
                 last_err = e
                 if e.code == 429:
-                    # 일시적 쿼터 초과 시 0.5초 후 가용 라이트 모델로 즉시 전환
                     time.sleep(0.5)
                     continue
                 else:
@@ -143,7 +142,6 @@ class DevLogAgent:
         if not text:
             return None
             
-        # 1. 표준 json.loads 시도
         pattern = r"```(?:json)?\s*(\{[\s\S]*?\})\s*```"
         match = re.search(pattern, text)
         candidates = []
@@ -163,7 +161,6 @@ class DevLogAgent:
             except Exception:
                 pass
 
-        # 2. create_notion_record 전용 안전 파서
         if "create_notion_record" in text:
             try:
                 title_m = re.search(r'["\']title["\']\s*:\s*["\']([^"\']+)["\']', text)
@@ -212,7 +209,6 @@ class DevLogAgent:
             except Exception:
                 pass
 
-        # 3. 기타 일반 도구 fallback
         for tool_name in ["scan_repository_overview", "read_code_file", "get_latest_commit_info", "get_working_diff"]:
             if f'"{tool_name}"' in text or f"'{tool_name}'" in text:
                 try:
